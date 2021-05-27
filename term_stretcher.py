@@ -8,6 +8,8 @@ import requests
 from bs4 import BeautifulSoup
 from logging import basicConfig, debug, info, error, INFO, DEBUG
 import pymorphy2  # $ pip install pymorphy2
+from multiprocessing.pool import Pool
+from functools import partial
 
 
 basicConfig(stream=open('log.txt', 'w', encoding='utf-8'), filemode='w', level=DEBUG)
@@ -19,6 +21,7 @@ in_data = load(open('data/pstu_qa_11554.json', 'r', encoding='utf-8'))
 stopterms = {'республика', 'город', 'край'}
 
 global session
+global dataset
 
 functors_pos = {'INTJ', 'PRCL', 'CONJ', 'PREP'}  # function words
 
@@ -70,7 +73,7 @@ def expand_term(input_term):
 
 
 def filter_dataset(dataset: list):
-    for thread, i in zip(dataset, range(len(trigrams))):
+    for thread, i in zip(dataset, range(len(dataset))):
         for post, j in zip(thread, range(len(thread))):
             tokens = post[0]
             new_term = [token for token in tokens if is_valid_term(token[1])]
@@ -78,9 +81,22 @@ def filter_dataset(dataset: list):
     return dataset
 
 
+def filter_thread(thread: list):
+    # for thread, i in zip(dataset, range(len(dataset))):
+    for post, j in zip(thread, range(len(thread))):
+        tokens = post[0]
+        new_term = [token for token in tokens if is_valid_term(token[1])]
+        # dataset[i][j][0] = new_term
+        thread[j][0] = new_term
+    return thread
+
+
 if __name__ == "__main__":
     # pass
-    ds = filter_dataset(trigrams)
+    # dataset = trigrams
+    # filter_partial = partial(filter_dataset, trigrams)
+    with Pool(12) as p:
+        ds = p.map(filter_thread, trigrams)
     debug("[{}] Dataset filtered".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S")))
     dump(ds, open('./data/ds.json', 'w'), indent=4, ensure_ascii=False)
     session = requests.Session()
