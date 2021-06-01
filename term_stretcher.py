@@ -1,3 +1,4 @@
+import multiprocessing
 from json import dump, load
 from rutermextract import TermExtractor
 # from utilities import compare_phrase
@@ -8,11 +9,12 @@ import requests
 from bs4 import BeautifulSoup
 from logging import basicConfig, debug, info, error, INFO, DEBUG
 import pymorphy2  # $ pip install pymorphy2
-from multiprocessing.pool import Pool
+from multiprocessing import Pool, Queue
+from queue import Empty
 from functools import partial
 
 
-basicConfig(stream=open('log.txt', 'w', encoding='utf-8'), filemode='w', level=DEBUG)
+# basicConfig(stream=open('log.txt', 'w', encoding='utf-8'), filemode='w', level=DEBUG)
 
 te = TermExtractor()
 trigrams = load(open('./data/trigrams.json', 'r', encoding='utf-8'))
@@ -48,30 +50,6 @@ def is_valid_term(token) -> bool:
     return True
 
 
-def expand_term(input_term):
-    try:
-        request = session.post(
-            'https://html.duckduckgo.com/html/',
-            data={'q': input_term.replace(' ', '+')},
-            headers=
-            {
-                'accept-language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7,mn;q=0.6',
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, '
-                              'like Gecko) Chrome/50.0.2661.102 Safari/537.36 '
-            }
-        )
-
-        x = request.content
-        dom = BeautifulSoup(x, features='lxml')
-        x = dom.text
-        rez = [
-            t for t in te(x, strings=1) if t.count(' ') > 0 and t not in stopterms and is_valid_term(t)
-        ]
-    except (KeyError, AssertionError):
-        return None
-    return tuple(rez)
-
-
 def filter_dataset(dataset: list):
     for thread, i in zip(dataset, range(len(dataset))):
         for post, j in zip(thread, range(len(thread))):
@@ -85,35 +63,70 @@ def filter_thread(thread: list):
     # for thread, i in zip(dataset, range(len(dataset))):
     for post, j in zip(thread, range(len(thread))):
         tokens = post[0]
+
         new_term = [token for token in tokens if is_valid_term(token[1])]
         # dataset[i][j][0] = new_term
         thread[j][0] = new_term
+        print("Post {} has been processed".format(j))
+    print("\nTHREAD PROCESSED\n")
     return thread
 
 
-if __name__ == "__main__":
-    # pass
-    # dataset = trigrams
-    # filter_partial = partial(filter_dataset, trigrams)
-    with Pool(12) as p:
-        ds = p.map(filter_thread, trigrams)
-    debug("[{}] Dataset filtered".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S")))
-    dump(ds, open('./data/ds.json', 'w'), indent=4, ensure_ascii=False)
-    session = requests.Session()
-    for thread, i in zip(ds, range(len(ds))):
+out_queue = Queue()
+
+
+def filter_threads(q: Queue, out: Queue):
+    while True:
+        try:
+            thread = q.get(True, 3)
+        except Empty:
+            return
+        if thread == "\0":
+            q.put(thread)
+            return
+
         for post, j in zip(thread, range(len(thread))):
             tokens = post[0]
-            for term in tokens:
-                result = expand_term(term[1])
-                # if result is None:
-                #     debug("[{}] Term '{}' skipped".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-                #                                           term[1]))
-                #     continue
-                # li = []
-                search_terms_str = ""
-                for search_term in result:
-                    search_terms_str += search_term + "\n"
-                    trigrams[i][j][0].append([0.5, search_term])
-                debug("[{}] Term '{}' expanded with:\n{}".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-                                                                 term[1], search_terms_str))
-    dump(trigrams, open('./data/trigrams.json', 'w'), indent=4, ensure_ascii=False)
+
+            new_term = [token for token in tokens if is_valid_term(token[1])]
+            # dataset[i][j][0] = new_term
+            thread[j][0] = new_term
+            print("Post {} has been processed".format(j))
+        print("\nTHREAD PROCESSED\n")
+        out.put(thread, True, 3)
+
+
+if __name__ == "__main__":
+
+    queue = Queue()
+    ds = []
+    pool = Pool(3, filter_threads, (queue, out_queue, ))
+    for thread in trigrams:
+        queue.put(thread)
+    queue.put("\0")
+    while not out_queue.empty():
+        ds.append(out_queue.get())
+
+    # ds = pool.map(filter_threads, queue)
+    # with Pool(3) as p:
+    #     ds = p.map(filter_threads, queue)
+    print("[{}] Dataset filtered".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S")))
+    dump(ds, open('./data/ds.json', 'w'), indent=4, ensure_ascii=False)
+    # session = requests.Session()
+    # for thread, i in zip(ds, range(len(ds))):
+    #     for post, j in zip(thread, range(len(thread))):
+    #         tokens = post[0]
+    #         for term in tokens:
+    #             result = expand_term(term[1])
+    #             # if result is None:
+    #             #     debug("[{}] Term '{}' skipped".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+    #             #                                           term[1]))
+    #             #     continue
+    #             # li = []
+    #             search_terms_str = ""
+    #             for search_term in result:
+    #                 search_terms_str += search_term + "\n"
+    #                 trigrams[i][j][0].append([0.5, search_term])
+    #             debug("[{}] Term '{}' expanded with:\n{}".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+    #                                                              term[1], search_terms_str))
+    # dump(trigrams, open('./data/trigrams.json', 'w'), indent=4, ensure_ascii=False)
