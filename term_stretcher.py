@@ -1,6 +1,7 @@
 import gc
 import multiprocessing
 import os
+import sys
 import time
 from json import dump, load
 
@@ -13,7 +14,7 @@ from logging import basicConfig, debug, info, error, INFO, DEBUG
 import pymorphy2  # $ pip install pymorphy2
 from multiprocessing import Pool, Queue
 from queue import Empty
-from memory_profiler import profile
+#from memory_profiler import profile
 
 basicConfig(stream=open('log.txt', 'w', encoding='utf-8'), filemode='w', level=DEBUG)
 
@@ -23,7 +24,7 @@ stopterms = {'республика', 'город', 'край'}
 
 # parser = argparse.ArgumentParser(description="Filters the terms in ./data/trigrams.json")
 # parser.add_argument('--n_jobs', action='store', type=int, help='processes')
-n_jobs = 3
+n_jobs = 8
 
 functors_pos = {'INTJ', 'PRCL', 'CONJ', 'PREP'}  # function words
 
@@ -95,36 +96,56 @@ def filter_threads(q: Queue, out: Queue, forbidden_words_dict: dict):
         thread = tup[1]
         thread_idx = tup[0]
         filter_thread(thread, thread_idx, forbidden_words_dict)
-        out.put(thread)
+        out.put(tup)
         gc.collect()
-        time.sleep(0.1)
+        #time.sleep(0.1)
     dump(forbidden_words_dict, open((cache_dir + 'word_cache_{}.json'.format(os.getpid())).format(os.getpid()), 'w'),
          indent=4, ensure_ascii=False)
 
 
 # @profile
-def dump_queue(out: Queue, temp_list: list):
+def dump_queue(out: Queue, temp_list: list, checkpoint_idx: int):
     # temp_list = []
     while True:
         try:
-            thread = out.get()
+            tup = out.get()
         except Empty:
             return
-        if thread == '\0':
-            dump(temp_list, open('./data/ds.json', 'w'), indent=4, ensure_ascii=False)
-            print("/////////////////////{} REMAINING THREADS DUMPED!////////////////////////".format(len(temp_list)))
+        if tup == '\0':
+            current_ds = load(open('./data/ds.json', 'r', encoding='utf-8'))
+            current_ds.append(temp_list)
+            dump(current_ds, open('./data/ds.json', 'w'), indent=4, ensure_ascii=False)
             temp_list.clear()
+            current_ds = None
+            print("/////////////////////{} REMAINING THREADS DUMPED!////////////////////////".format(len(temp_list)))
             return
-
+        
+        thread = tup[1]
+        thread_idx = tup[0]
         temp_list.append(thread)
         if len(temp_list) >= 10:
-            dump(temp_list, open('./data/ds.json', 'w'), indent=4, ensure_ascii=False)
+            current_ds = load(open('./data/ds.json', 'r', encoding='utf-8'))
+            current_ds.append(temp_list)
+            dump(current_ds, open('./data/ds.json', 'w'), indent=4, ensure_ascii=False)
             temp_list.clear()
+            current_ds = None
+            checkpoint_idx = thread_idx
+            with open('checkpoint.txt', 'w', encoding='utf-8') as file:
+                file.write(str(checkpoint_idx))
             print("/////////////////////10 THREADS DUMPED!////////////////////////")
+            
+            
+#def restart(start_time):
+#    while True:
+#        if (time.time() - start_time) >= 20: # 12 hours
+#            print("[{}] Rebooting...".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S")))
+#            os.execv(__file__, sys.argv)
+#            exit(0)
 
 
 # @profile
 def main():
+#    start_time = time.time()
     # global trigrams
     trigrams = load(open('./data/trigrams.json', 'r', encoding='utf-8'))
     forbidden_words_dict = {}
@@ -138,21 +159,33 @@ def main():
     trigrams = None
     temp_list = []
     gc.collect()
-
-    path.Path('./data/ds.json').touch()
-
+    
+    checkpoint = 0
+    try:
+        with open('checkpoint.txt', 'r', encoding='utf-8') as file:
+            checkpoint = int(file.read())
+    except FileNotFoundError:
+        pass
+    
+    if checkpoint != 0:
+        print("[{}] Restarting from checkpoint {}".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S"), checkpoint))
+    else:
+        dump([], open('./data/ds.json', 'w'), indent=4, ensure_ascii=False)
+    
     if n_jobs is not None:
         in_queue, out_queue = Queue(), Queue()
 
         pool = Pool(n_jobs, filter_threads, (in_queue, out_queue, forbidden_words_dict, ))
-        out_proc = multiprocessing.Process(target=dump_queue, args=(out_queue, temp_list))
+        out_proc = multiprocessing.Process(target=dump_queue, args=(out_queue, temp_list, checkpoint))
+#        restart_proc = multiprocessing.Process(target=restart, args=(start_time, ))
         out_proc.start()
-        for tup in num_trigrams:
+#        restart_proc.start()
+        for tup in num_trigrams[checkpoint:]:
             in_queue.put(tup)
-            if tup[0] == 22:
-                break
-            while in_queue.qsize() > 10:
-                time.sleep(10)
+            #if tup[0] == 22:
+            #    break
+            while in_queue.qsize() > 12:
+                time.sleep(1)
         in_queue.put("\0")
         pool.close()
         pool.join()
@@ -162,15 +195,15 @@ def main():
     else:
         for tup in num_trigrams:
             filter_thread(tup[1], tup[0], forbidden_words_dict)
-            if tup[0] == 22:
-                break
+            #if tup[0] == 22:
+            #    break
         dump(forbidden_words_dict,
              open((cache_dir + 'word_cache.json'.format(os.getpid())).format(os.getpid()), 'w'),
              indent=4, ensure_ascii=False)
         # while in_queue.qsize() > 10:
         #     time.sleep(10)
 
-    debug("[{}] Dataset filtered".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S")))
+    print("[{}] Dataset filtered".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S")))
 
 
 if __name__ == "__main__":
