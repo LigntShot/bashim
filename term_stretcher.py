@@ -14,7 +14,6 @@ from logging import basicConfig, debug, info, error, INFO, DEBUG
 import pymorphy2  # $ pip install pymorphy2
 from multiprocessing import Pool, Queue
 from queue import Empty
-#from memory_profiler import profile
 
 basicConfig(stream=open('log.txt', 'w', encoding='utf-8'), filemode='w', level=DEBUG)
 
@@ -30,6 +29,8 @@ functors_pos = {'INTJ', 'PRCL', 'CONJ', 'PREP'}  # function words
 
 cache_dir = 'cache/'
 
+morth=pymorphy2.MorphAnalyzer()
+
 
 def is_valid_term(token, forbidden_words_dict: dict) -> bool:
     def is_russian(token) -> bool:
@@ -39,7 +40,7 @@ def is_valid_term(token, forbidden_words_dict: dict) -> bool:
             rez = False
         return rez
 
-    def pos(word, morth=pymorphy2.MorphAnalyzer()):
+    def pos(word):
         "Return a likely part of speech for the *word*."""
         try:
             return forbidden_words_dict[word]
@@ -78,6 +79,7 @@ def filter_thread(thread: list, thread_idx: int, forbidden_words_dict: dict):
         thread[j][0] = [token for token in tokens if is_valid_term(token[1], forbidden_words_dict)]
         print("Post {} of thread {} has been processed".format(j, thread_idx))
     print("\nTHREAD {} PROCESSED\n".format(thread_idx))
+    # tracker.print_diff()
     # return thread
 
 
@@ -145,7 +147,6 @@ def dump_queue(out: Queue, temp_list: list, checkpoint_idx: int):
 
 # @profile
 def main():
-#    start_time = time.time()
     # global trigrams
     trigrams = load(open('./data/trigrams.json', 'r', encoding='utf-8'))
     forbidden_words_dict = {}
@@ -182,9 +183,9 @@ def main():
 #        restart_proc.start()
         for tup in num_trigrams[checkpoint:]:
             in_queue.put(tup)
-            #if tup[0] == 22:
-            #    break
-            while in_queue.qsize() > 12:
+            # if tup[0] == 20:
+            #     break
+            while in_queue.qsize() > 10:
                 time.sleep(1)
         in_queue.put("\0")
         pool.close()
@@ -208,6 +209,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
     # dump(ds, open('./data/ds.json', 'w'), indent=4, ensure_ascii=False)
     # session = requests.Session()
     # for thread, i in zip(ds, range(len(ds))):
