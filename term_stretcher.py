@@ -64,14 +64,6 @@ def is_valid_term(token, forbidden_words_dict: dict) -> bool:
     return True
 
 
-# def filter_dataset(dataset: list):
-#     for thread, i in zip(dataset, range(len(dataset))):
-#         for post, j in zip(thread, range(len(thread))):
-#             tokens = post[0]
-#             new_term = [token for token in tokens if is_valid_term(token[1])]
-#             dataset[i][j][0] = new_term
-#     return dataset
-
 # @profile
 def filter_thread(thread: list, thread_idx: int, forbidden_words_dict: dict):
     for post, j in zip(thread, range(len(thread))):
@@ -79,8 +71,6 @@ def filter_thread(thread: list, thread_idx: int, forbidden_words_dict: dict):
         thread[j][0] = [token for token in tokens if is_valid_term(token[1], forbidden_words_dict)]
         print("Post {} of thread {} has been processed".format(j, thread_idx))
     print("\nTHREAD {} PROCESSED\n".format(thread_idx))
-    # tracker.print_diff()
-    # return thread
 
 
 # @profile
@@ -100,14 +90,11 @@ def filter_threads(q: Queue, out: Queue, forbidden_words_dict: dict):
         filter_thread(thread, thread_idx, forbidden_words_dict)
         out.put(tup)
         gc.collect()
-        #time.sleep(0.1)
     dump(forbidden_words_dict, open((cache_dir + 'word_cache_{}.json'.format(os.getpid())).format(os.getpid()), 'w'),
          indent=4, ensure_ascii=False)
 
 
-# @profile
 def dump_queue(out: Queue, temp_list: list, checkpoint_idx: int):
-    # temp_list = []
     while True:
         try:
             tup = out.get()
@@ -117,9 +104,9 @@ def dump_queue(out: Queue, temp_list: list, checkpoint_idx: int):
             current_ds = load(open('./data/ds.json', 'r', encoding='utf-8'))
             current_ds.append(temp_list)
             dump(current_ds, open('./data/ds.json', 'w'), indent=4, ensure_ascii=False)
-            temp_list.clear()
             current_ds = None
             print("/////////////////////{} REMAINING THREADS DUMPED!////////////////////////".format(len(temp_list)))
+            temp_list.clear()
             return
         
         thread = tup[1]
@@ -136,16 +123,7 @@ def dump_queue(out: Queue, temp_list: list, checkpoint_idx: int):
                 file.write(str(checkpoint_idx))
             print("/////////////////////10 THREADS DUMPED!////////////////////////")
             
-            
-#def restart(start_time):
-#    while True:
-#        if (time.time() - start_time) >= 20: # 12 hours
-#            print("[{}] Rebooting...".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S")))
-#            os.execv(__file__, sys.argv)
-#            exit(0)
 
-
-# @profile
 def main():
     # global trigrams
     trigrams = load(open('./data/trigrams.json', 'r', encoding='utf-8'))
@@ -154,7 +132,6 @@ def main():
     for filename in os.listdir(cache_dir):
         current_dict = load(open(cache_dir + filename, 'r', encoding='utf-8'))
         forbidden_words_dict = {**forbidden_words_dict, **current_dict}  # join
-        # os.remove(cache_dir + filename)
 
     num_trigrams = [(i, thread) for i, thread in zip(range(len(trigrams)), trigrams)]
     trigrams = None
@@ -178,21 +155,24 @@ def main():
 
         pool = Pool(n_jobs, filter_threads, (in_queue, out_queue, forbidden_words_dict, ))
         out_proc = multiprocessing.Process(target=dump_queue, args=(out_queue, temp_list, checkpoint))
-#        restart_proc = multiprocessing.Process(target=restart, args=(start_time, ))
         out_proc.start()
-#        restart_proc.start()
         for tup in num_trigrams[checkpoint:]:
             in_queue.put(tup)
-            # if tup[0] == 20:
-            #     break
+            if tup[0] == 25:
+                break
             while in_queue.qsize() > 10:
-                time.sleep(1)
+                time.sleep(0.5)
         in_queue.put("\0")
-        pool.close()
-        pool.join()
-        out_proc.join()
-        out_proc.close()
 
+        while True:
+            try:
+                pool.join()
+            except ValueError:
+                print("[{}] Waiting for workers to finish...\n".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S")))
+                sleep(10)
+            break
+        out_proc.join()
+        os.remove('checkpoint.txt')
     else:
         for tup in num_trigrams:
             filter_thread(tup[1], tup[0], forbidden_words_dict)
@@ -201,8 +181,6 @@ def main():
         dump(forbidden_words_dict,
              open((cache_dir + 'word_cache.json'.format(os.getpid())).format(os.getpid()), 'w'),
              indent=4, ensure_ascii=False)
-        # while in_queue.qsize() > 10:
-        #     time.sleep(10)
 
     print("[{}] Dataset filtered".format(datetime.now().strftime("%d/%m/%Y %H:%M:%S")))
 
